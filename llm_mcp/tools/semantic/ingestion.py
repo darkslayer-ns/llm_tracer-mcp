@@ -128,13 +128,27 @@ class SemanticIngestionTool(BaseTool):
                 chunk_overlap=input_data.chunk_overlap
             )
             
-            # Initialize the working semantic search tool for ingestion
-            search_tool = WorkingSemanticSearchTool(config)
-            await search_tool.initialize()
+            # Use the proper RAG ingestion logic instead of search tool
+            from ...rag.ingestion import SemanticIngester
             
-            # Perform ingestion
-            logger.info("Starting repository indexing...")
-            indexing_stats = await search_tool.index_directory(input_data.repository_path)
+            logger.info("Starting repository indexing with proper RAG ingestion...")
+            ingester = SemanticIngester()
+            
+            # Convert input data to the format expected by SemanticIngester
+            ingestion_response = await ingester.ingest_repository(
+                repository_path=input_data.repository_path,
+                database_path=db_location,
+                embedding_model=input_data.embedding_model,
+                languages=input_data.languages,
+                max_file_size=input_data.max_file_size,
+                chunk_size=input_data.chunk_size,
+                chunk_overlap=input_data.chunk_overlap
+            )
+            
+            if not ingestion_response.success:
+                raise Exception(ingestion_response.error_message or "Ingestion failed")
+            
+            indexing_stats = ingestion_response.indexing_stats
             
             # Save metadata about the ingestion for later querying
             metadata_file = Path(db_location) / "ingestion_metadata.json"
@@ -159,8 +173,7 @@ class SemanticIngestionTool(BaseTool):
             # Calculate database size
             db_size = self._calculate_directory_size(Path(db_location))
             
-            # Clean up the search tool
-            await search_tool.close()
+            # No cleanup needed since we're using the RAG ingester directly
             
             ingestion_time = time.time() - start_time
             logger.info(f"Ingestion completed in {ingestion_time:.2f} seconds")

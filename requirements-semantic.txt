@@ -17,3 +17,7 @@ sentence-transformers>=2.2.0
 numpy>=1.21.0
 scikit-learn>=1.0.0
 openai
+
+# Tree-sitter dependencies (pinned to compatible versions)
+tree-sitter==0.21.3
+tree-sitter-languages==1.9.1

@@ -19,6 +19,7 @@ try:
     from qdrant_client import QdrantClient
     from qdrant_client.models import Distance, VectorParams, PointStruct
     from langchain_community.document_loaders.generic import GenericLoader
+    from langchain_community.document_loaders.concurrent import ConcurrentLoader
     from langchain_community.document_loaders.parsers import LanguageParser
     from langchain.schema import Document
     from langchain_huggingface import HuggingFaceEmbeddings
@@ -35,7 +36,7 @@ from ..models.semantic_ingestion import (
 )
 from ..utils.constants import (
     LANGUAGE_EXTENSIONS, SUPPORTED_LANGUAGES, ALL_CODE_EXTENSIONS,
-    EXCLUDED_PATTERNS, MAX_FILE_SIZE_BYTES, DEFAULT_CHUNK_SIZE, 
+    EXCLUDED_PATTERNS, MAX_FILE_SIZE_BYTES, DEFAULT_CHUNK_SIZE,
     DEFAULT_CHUNK_OVERLAP, EMBEDDING_MODELS, DEFAULT_EMBEDDING_MODEL,
     get_language_from_extension, get_extensions_for_language,
     should_exclude_path, get_exclude_patterns_list
@@ -194,12 +195,12 @@ class SemanticIngester:
             )
     
     async def _process_repository_with_langchain(
-        self, 
-        repository_path: str, 
-        languages: Optional[list], 
+        self,
+        repository_path: str,
+        languages: Optional[list],
         max_file_size: int
     ) -> List[Document]:
-        """Process repository using LangChain's LanguageParser."""
+        """Repository processing using manual exclusion filtering (ConcurrentLoader exclude is broken)."""
         try:
             repo_path = Path(repository_path)
             if not repo_path.exists():
@@ -208,102 +209,65 @@ class SemanticIngester:
             # Get file suffixes based on languages using constants
             suffixes = self._get_file_suffixes_from_languages(languages)
             
-            # Pre-filter files to avoid processing excluded ones
+            logger.info(f"Processing repository with manual exclusion filtering using suffixes {suffixes}")
+            
+            # Manually collect files with proper exclusion filtering
             valid_files = []
             for suffix in suffixes:
                 for file_path in repo_path.rglob(f"*{suffix}"):
                     if file_path.is_file():
-                        # Check exclusion patterns first
-                        if should_exclude_path(file_path.parts):
-                            logger.debug(f"Excluding file due to pattern: {file_path}")
+                        # Use centralized exclusion logic with relative path
+                        try:
+                            relative_path = file_path.relative_to(repo_path)
+                            if should_exclude_path(relative_path.parts):
+                                logger.debug(f"Excluding file: {relative_path}")
+                                continue
+                        except ValueError:
+                            # If we can't get relative path, skip the file
+                            logger.debug(f"Could not get relative path for: {file_path}")
                             continue
                         
                         # Check file size
-                        if file_path.stat().st_size <= max_file_size:
-                            valid_files.append(file_path)
-                        else:
-                            logger.debug(f"Skipping large file: {file_path}")
+                        try:
+                            if file_path.stat().st_size > max_file_size:
+                                logger.debug(f"Skipping large file: {file_path}")
+                                continue
+                        except (OSError, FileNotFoundError):
+                            logger.debug(f"Could not check file size for: {file_path}")
+                            continue
+                        
+                        valid_files.append(file_path)
             
-            logger.info(f"Found {len(valid_files)} valid files to process")
+            logger.info(f"Found {len(valid_files)} valid files after exclusion filtering")
             
-            # Process only valid files with LangChain
-            filtered_docs = []
+            # Process the filtered files
+            documents = []
+            
             for file_path in valid_files:
                 try:
-                    # Use LangChain GenericLoader for individual files
-                    loader = GenericLoader.from_filesystem(
-                        path=str(file_path.parent),
-                        glob=file_path.name,
-                        parser=LanguageParser(),
-                        show_progress=False
-                    )
+                    # Load and parse the file
+                    content = file_path.read_text(encoding='utf-8', errors='ignore')
                     
-                    # Load and process this file
-                    file_docs = loader.load()
-                    for doc in file_docs:
-                        # Add language metadata using constants
-                        doc.metadata['language'] = get_language_from_extension(file_path.suffix)
-                        filtered_docs.append(doc)
-                        
+                    # Create document with proper metadata
+                    doc = Document(
+                        page_content=content,
+                        metadata={
+                            'source': str(file_path),
+                            'language': get_language_from_extension(file_path.suffix)
+                        }
+                    )
+                    documents.append(doc)
+                    
                 except Exception as e:
-                    logger.warning(f"Failed to process file {file_path} with LangChain: {e}")
-                    # Fallback to simple text reading
-                    try:
-                        content = file_path.read_text(encoding='utf-8', errors='ignore')
-                        doc = Document(
-                            page_content=content,
-                            metadata={
-                                'source': str(file_path),
-                                'language': get_language_from_extension(file_path.suffix)
-                            }
-                        )
-                        filtered_docs.append(doc)
-                    except Exception as e2:
-                        logger.warning(f"Failed to read file {file_path}: {e2}")
+                    logger.warning(f"Failed to process file {file_path}: {e}")
+                    continue
             
-            logger.info(f"Loaded {len(filtered_docs)} documents from {len(valid_files)} total files")
-            return filtered_docs
+            logger.info(f"Successfully loaded {len(documents)} documents with manual exclusion filtering")
+            return documents
             
         except Exception as e:
-            logger.error(f"Failed to process repository with LangChain: {e}")
-            # Fallback to simple file processing
-            return await self._fallback_file_processing(repository_path, languages, max_file_size)
-    
-    async def _fallback_file_processing(
-        self, 
-        repository_path: str, 
-        languages: Optional[list], 
-        max_file_size: int
-    ) -> List[Document]:
-        """Fallback file processing if LangChain fails."""
-        logger.info("Using fallback file processing...")
-        documents = []
-        repo_path = Path(repository_path)
-        suffixes = self._get_file_suffixes_from_languages(languages)
-        
-        for suffix in suffixes:
-            for file_path in repo_path.rglob(f"*{suffix}"):
-                if file_path.is_file():
-                    # Check exclusion patterns
-                    if should_exclude_path(file_path.parts):
-                        continue
-                    
-                    # Check file size
-                    if file_path.stat().st_size <= max_file_size:
-                        try:
-                            content = file_path.read_text(encoding='utf-8', errors='ignore')
-                            doc = Document(
-                                page_content=content,
-                                metadata={
-                                    'source': str(file_path),
-                                    'language': get_language_from_extension(file_path.suffix)
-                                }
-                            )
-                            documents.append(doc)
-                        except Exception as e:
-                            logger.warning(f"Failed to read file {file_path}: {e}")
-        
-        return documents
+            logger.error(f"Failed to process repository: {e}")
+            raise e
     
     async def _documents_to_chunks(self, documents: List[Document]) -> List[CodeChunk]:
         """Convert LangChain documents to CodeChunk objects."""
@@ -495,6 +459,41 @@ class SemanticIngester:
         
         # Return all supported extensions
         return ALL_CODE_EXTENSIONS
+    
+    def _convert_patterns_to_glob_format(self, patterns: set) -> List[str]:
+        """
+        Convert exclusion patterns to glob format for ConcurrentLoader.
+        
+        Based on testing, ConcurrentLoader needs specific glob patterns:
+        - For directories: both "dirname" and "dirname/**" to exclude dir and contents
+        - For files with wildcards: both "pattern" and "**/pattern"
+        
+        Args:
+            patterns: Set of exclusion patterns from constants
+            
+        Returns:
+            List of glob-formatted exclusion patterns that actually work
+        """
+        glob_patterns = []
+        
+        for pattern in patterns:
+            if '*' in pattern:
+                # File patterns with wildcards (*.pyc, *.log, etc.)
+                glob_patterns.append(pattern)
+                glob_patterns.append(f"**/{pattern}")
+            elif '.' in pattern and not pattern.startswith('.'):
+                # Specific files like Thumbs.db
+                glob_patterns.append(f"**/{pattern}")
+            else:
+                # Directory names (including hidden dirs like .git)
+                # Use the proven working pattern: exclude both directory and its contents
+                glob_patterns.append(pattern)
+                glob_patterns.append(f"{pattern}/**")
+                glob_patterns.append(f"**/{pattern}")
+                glob_patterns.append(f"**/{pattern}/**")
+        
+        logger.debug(f"Converted {len(patterns)} patterns to {len(glob_patterns)} glob patterns")
+        return glob_patterns
     
     def _save_metadata(
         self, 

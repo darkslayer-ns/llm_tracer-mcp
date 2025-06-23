@@ -256,3 +256,4 @@ def get_exclude_patterns_list() -> List[str]:
         List of exclusion patterns
     """
     return list(EXCLUDED_PATTERNS)
+

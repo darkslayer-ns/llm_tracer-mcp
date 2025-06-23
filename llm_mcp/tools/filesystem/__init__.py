@@ -4,13 +4,13 @@ Filesystem tools for file operations and search functionality.
 
 from .file_ops import (
     FileReadTool,
-    FileWriteTool,
+    # FileWriteTool,
     ListDirectoryTool,
     FileReadRequest,
-    FileWriteRequest,
+    # FileWriteRequest,
     ListDirectoryRequest,
     FileReadResponse,
-    FileWriteResponse,
+    # FileWriteResponse,
     ListDirectoryResponse,
     FileInfo
 )
@@ -29,7 +29,7 @@ from .search import (
 __all__ = [
     # File operation tools
     "FileReadTool",
-    "FileWriteTool", 
+    # "FileWriteTool", 
     "ListDirectoryTool",
     
     # Search tools
@@ -38,14 +38,14 @@ __all__ = [
     
     # Request models
     "FileReadRequest",
-    "FileWriteRequest",
+    # "FileWriteRequest",
     "ListDirectoryRequest",
     "SearchFilesRequest",
     "SearchInFilesRequest",
     
     # Response models
     "FileReadResponse",
-    "FileWriteResponse",
+    # "FileWriteResponse",
     "ListDirectoryResponse",
     "SearchFilesResponse",
     "SearchInFilesResponse",

@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 from fastmcp import FastMCP
 
 from ...tools.filesystem.search import SearchInFilesTool
-from ...tools.filesystem.file_ops import FileReadTool, FileWriteTool, ListDirectoryTool
+from ...tools.filesystem.file_ops import FileReadTool, ListDirectoryTool
 from ...tools.semantic.search import WorkingSemanticSearchTool
 from ...models.semantic import SemanticSearchConfig
 from ...utils.constants import DEFAULT_SIMILARITY_THRESHOLD

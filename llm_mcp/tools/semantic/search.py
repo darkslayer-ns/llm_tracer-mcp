@@ -118,25 +118,7 @@ class WorkingSemanticSearchTool(BaseTool):
             logger.error(f"Failed to initialize semantic search tool: {e}")
             raise
 
-    async def index_directory(self, directory: str) -> IndexingStats:
-        """Index all files in directory first, before any searches."""
-        try:
-            await self.initialize()
-            
-            # Create a dummy request for indexing
-            dummy_request = SemanticSearchRequest(
-                query="",  # Not used for indexing
-                directory=directory
-            )
-            
-            # Index all files
-            stats = await self._index_directory_incremental(dummy_request)
-            logger.info(f"Pre-indexed directory: {stats.files_processed} files, {stats.chunks_created} chunks")
-            return stats
-            
-        except Exception as e:
-            logger.error(f"Failed to index directory: {e}")
-            raise
+    # Removed index_directory method - search tool should only search existing databases
 
     async def execute(
         self,
@@ -150,30 +132,19 @@ class WorkingSemanticSearchTool(BaseTool):
             # Initialize if needed
             await self.initialize()
             
-            # Handle reindex parameter - force indexing if requested
-            indexing_stats = None
-            if input_data.reindex:
-                logger.info("Reindex requested - performing incremental indexing")
-                indexing_stats = await self._index_directory_incremental(input_data)
-            else:
-                # Skip indexing during search - assume it's already done
-                # If you want to force indexing, call index_directory() first
-                pass
-            
-            # Search for similar chunks
+            # Search for similar chunks (no indexing in search tool)
             results = await self._search_similar(input_data)
             
-            # Use actual indexing stats if reindexing was performed, otherwise empty stats
-            if indexing_stats is None:
-                indexing_stats = IndexingStats(
-                    files_processed=0,
-                    files_indexed=0,
-                    files_skipped=0,
-                    chunks_created=0,
-                    languages_found=[],
-                    indexing_time=0.0,
-                    errors=[]
-                )
+            # Empty indexing stats since search tool doesn't index
+            indexing_stats = IndexingStats(
+                files_processed=0,
+                files_indexed=0,
+                files_skipped=0,
+                chunks_created=0,
+                languages_found=[],
+                indexing_time=0.0,
+                errors=[]
+            )
             
             # Build response
             response = SemanticSearchResponse(
@@ -243,189 +214,7 @@ class WorkingSemanticSearchTool(BaseTool):
         except Exception as e:
             logger.warning(f"Failed to save index cache: {e}")
 
-    async def _index_directory_incremental(self, request: SemanticSearchRequest) -> IndexingStats:
-        """Index files incrementally - only new/changed files."""
-        start_time = time.time()
-        total_files = 0
-        total_chunks = 0
-        new_files = 0
-        
-        # Use directory field from SemanticSearchRequest
-        path = Path(request.directory)
-        if not path.exists():
-            return IndexingStats(
-                files_processed=0,
-                files_indexed=0,
-                files_skipped=0,
-                chunks_created=0,
-                languages_found=[],
-                indexing_time=0.0,
-                errors=[]
-            )
-        
-        if path.is_file():
-            files_to_process = [path]
-        else:
-            # Get all files in directory
-            exclude_patterns = self._get_comprehensive_exclude_patterns(request.exclude_patterns or [])
-            suffixes = self._get_file_suffixes(request)
-            
-            files_to_process = []
-            for suffix in suffixes:
-                pattern = f"**/*{suffix}"
-                for file_path in path.glob(pattern):
-                    if file_path.is_file() and not self._should_exclude_file(file_path, exclude_patterns):
-                        files_to_process.append(file_path)
-        
-        # Filter to only new/changed files (or all files if reindex=True)
-        files_to_index = []
-        for file_path in files_to_process:
-            file_str = str(file_path)
-            try:
-                current_mtime = file_path.stat().st_mtime
-                
-                # If reindex is requested, index all files regardless of cache
-                if request.reindex or file_str not in self.indexed_files or self.indexed_files[file_str] != current_mtime:
-                    files_to_index.append(file_path)
-                    self.indexed_files[file_str] = current_mtime
-                    new_files += 1
-            except Exception as e:
-                logger.warning(f"Error checking file {file_path}: {e}")
-        
-        if files_to_index:
-            # Process new/changed files
-            chunks = await self._process_files(files_to_index, request)
-            if chunks:
-                await self._index_chunks(chunks)
-                total_chunks += len(chunks)
-            
-            total_files += len(files_to_index)
-        
-        # Save updated cache
-        await self._save_index_cache()
-        
-        indexing_time = time.time() - start_time
-        logger.info(f"Indexed {new_files} new/changed files, {total_chunks} chunks")
-        
-        return IndexingStats(
-            files_processed=total_files,
-            files_indexed=new_files,
-            files_skipped=len(files_to_process) - new_files,
-            chunks_created=total_chunks,
-            languages_found=list(set()),
-            indexing_time=indexing_time,
-            errors=[]
-        )
-
-    async def _process_files(self, files: List[Path], request: SemanticSearchRequest) -> List[CodeChunk]:
-        """Process files using LangChain LanguageParser."""
-        chunks = []
-        
-        for file_path in files:
-            try:
-                # Simple text processing for now to avoid langchain issues
-                content = file_path.read_text(encoding='utf-8', errors='ignore')
-                
-                # Create a simple chunk for the whole file
-                chunk = CodeChunk(
-                    content=content[:1000],  # Limit content size
-                    file_path=str(file_path),
-                    start_line=1,
-                    end_line=len(content.split('\n')),
-                    language=self._detect_language_from_path(str(file_path)),
-                    chunk_type=ChunkType.OTHER,
-                    similarity_score=0.0,  # Use correct field name
-                    function_name=None,
-                    class_name=None,
-                    signature=None
-                )
-                chunks.append(chunk)
-                        
-            except Exception as e:
-                logger.warning(f"Error processing file {file_path}: {e}")
-                continue
-        
-        return chunks
-
-    def _detect_language_from_path(self, file_path: str) -> str:
-        """Detect programming language from file path."""
-        path = Path(file_path)
-        suffix = path.suffix.lower()
-        
-        language_map = {
-            '.py': 'python',
-            '.js': 'javascript',
-            '.ts': 'typescript',
-            '.java': 'java',
-            '.cpp': 'cpp',
-            '.c': 'c',
-            '.go': 'go',
-            '.rs': 'rust',
-            '.php': 'php',
-            '.rb': 'ruby'
-        }
-        
-        return language_map.get(suffix, 'unknown')
-
-    async def _index_chunks(self, chunks: List[CodeChunk]) -> None:
-        """Index code chunks into Qdrant using neural embeddings."""
-        try:
-            # Prepare texts for embedding
-            texts = [self._prepare_text_for_embedding(chunk) for chunk in chunks]
-            
-            # Generate embeddings using LangChain HuggingFace embeddings
-            embeddings = self.embeddings.embed_documents(texts)
-            
-            # Ensure embeddings are numpy arrays
-            embeddings = np.array(embeddings)
-            
-            # Create points for Qdrant
-            points = []
-            for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
-                point = PointStruct(
-                    id=hash(f"{chunk.file_path}:{chunk.start_line}:{chunk.content[:50]}"),
-                    vector=embedding.tolist(),
-                    payload={
-                        "content": chunk.content,
-                        "file_path": chunk.file_path,
-                        "start_line": chunk.start_line,
-                        "end_line": chunk.end_line,
-                        "language": chunk.language,
-                        "chunk_type": chunk.chunk_type.value if hasattr(chunk.chunk_type, 'value') else str(chunk.chunk_type),
-                        "function_name": chunk.function_name,
-                        "class_name": chunk.class_name,
-                        "signature": chunk.signature
-                    }
-                )
-                points.append(point)
-            
-            # Upload to Qdrant
-            self.qdrant_client.upsert(
-                collection_name=self.config.qdrant_config.collection_name,
-                points=points
-            )
-            
-            logger.info(f"Indexed {len(chunks)} chunks into Qdrant")
-            
-        except Exception as e:
-            logger.error(f"Failed to index chunks: {e}")
-            raise
-
-    def _prepare_text_for_embedding(self, chunk: CodeChunk) -> str:
-        """Prepare text for embedding by combining relevant fields."""
-        parts = [chunk.content]
-        
-        if chunk.function_name:
-            parts.append(f"function {chunk.function_name}")
-        
-        if chunk.class_name:
-            parts.append(f"class {chunk.class_name}")
-        
-        # Add language and chunk type as context
-        parts.append(f"language {chunk.language}")
-        parts.append(f"type {chunk.chunk_type.value if hasattr(chunk.chunk_type, 'value') else str(chunk.chunk_type)}")
-        
-        return " ".join(parts)
+    # Removed all indexing methods - search tool should only search existing databases
 
     async def _search_similar(self, request: SemanticSearchRequest) -> List[CodeChunk]:
         """Search for similar code chunks using neural embeddings."""
@@ -517,50 +306,7 @@ class WorkingSemanticSearchTool(BaseTool):
             logger.error(f"Search failed: {e}")
             raise
 
-    def _get_comprehensive_exclude_patterns(self, user_excludes: List[str]) -> List[str]:
-        """Get comprehensive exclude patterns including common cache/build directories."""
-        default_excludes = [
-            "node_modules", ".git", ".svn", ".hg", "__pycache__", ".pytest_cache",
-            "venv", "env", ".venv", ".env", "virtualenv",
-            "build", "dist", "target", "bin", "obj",
-            ".idea", ".vscode", ".vs", "*.pyc", "*.pyo", "*.pyd",
-            ".DS_Store", "Thumbs.db", "*.log", "*.tmp", "*.temp"
-        ]
-        return default_excludes + (user_excludes or [])
-
-    def _get_file_suffixes(self, request: SemanticSearchRequest) -> List[str]:
-        """Get file suffixes based on request parameters."""
-        if hasattr(request, 'languages') and request.languages:
-            # Map languages to file extensions
-            lang_map = {
-                'python': '.py', 'javascript': '.js', 'typescript': '.ts',
-                'java': '.java', 'cpp': '.cpp', 'c': '.c', 'go': '.go',
-                'rust': '.rs', 'php': '.php', 'ruby': '.rb'
-            }
-            return [lang_map.get(lang, f".{lang}") for lang in request.languages]
-        
-        # Default to common programming language extensions
-        return [
-            '.py', '.js', '.ts', '.jsx', '.tsx', '.java', '.cpp', '.c', '.h', '.hpp',
-            '.cs', '.php', '.rb', '.go', '.rs', '.swift', '.kt', '.scala', '.r',
-            '.m', '.sh', '.sql', '.html', '.css', '.scss', '.less', '.xml',
-            '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf',
-            '.md', '.rst', '.txt'
-        ]
-
-    def _should_exclude_file(self, file_path: Path, exclude_patterns: List[str]) -> bool:
-        """Check if file should be excluded based on patterns."""
-        file_str = str(file_path)
-        file_name = file_path.name
-        
-        for pattern in exclude_patterns:
-            if pattern in file_str or pattern in file_name:
-                return True
-            # Handle glob-like patterns
-            if pattern.startswith('*.') and file_name.endswith(pattern[1:]):
-                return True
-        
-        return False
+    # Removed exclusion pattern methods - search tool should only search existing databases
 
     async def close(self) -> None:
         """Clean up resources."""

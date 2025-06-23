@@ -3,7 +3,7 @@ Built-in tools for the generic LLM-MCP framework.
 """
 
 from .base import BaseTool
-from .filesystem import FileReadTool, FileWriteTool, ListDirectoryTool, SearchFilesTool, SearchInFilesTool
+from .filesystem import FileReadTool, ListDirectoryTool, SearchFilesTool, SearchInFilesTool
 
 # Try to import semantic tools from the semantic folder
 try:
@@ -15,7 +15,6 @@ except ImportError:
 __all__ = [
     "BaseTool",
     "FileReadTool",
-    "FileWriteTool",
     "ListDirectoryTool",
     "SearchFilesTool",
     "SearchInFilesTool"

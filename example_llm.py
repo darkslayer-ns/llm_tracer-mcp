@@ -98,9 +98,9 @@ Provide performance insights and optimization suggestions."""
         print(f"   Async Patterns: {len(performance_result.async_patterns)} items")
         
         # Clean up the database manually
-        print("\n🧹 Cleaning up semantic database...")
-        await semantic_db.cleanup()
-        print("✅ Database cleaned up successfully")
+        # print("\n🧹 Cleaning up semantic database...")
+        # await semantic_db.cleanup()
+        # print("✅ Database cleaned up successfully")
         
         # Final summary
         print("\n" + "=" * 60)
